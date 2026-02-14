@@ -1,16 +1,13 @@
 ![Zelta Logo](https://zelta.space/index/zelta-banner.svg)
 
 # The Zelta Backup and Recovery Suite
-*Version v1.1-beta4, 2026-01-13*
+*Version 1.1, 2026-01-20*
 
 ---
 
-> **⚠️ BETA NOTICE**  
-> This is a beta release with significant improvements over the stable 1.0 branch. Documentation and QA are ongoing, but the codebase is solid and is actively being used in production for thousands of backup workflows.
-> 
-> - **Stable Release:** For the most tried-and-true version of Zelta see the [March 2024 release (v1.0)](https://github.com/bellhyve/zelta/tree/release/1.0)
 > - **What's New:** Check [CHANGELOG.md](CHANGELOG.md) for the latest changes
 > - **Found a Bug?** Please [open an issue](https://github.com/bellhyve/zelta/issues)
+> - **Previous Release:** [March 2024, Zelta v1.0](https://github.com/bellhyve/zelta/tree/release/1.0)
 
 ---
 
@@ -42,7 +39,7 @@ Written in portable Bourne shell and AWK, Zelta runs anywhere ZFS runs. No packa
 
 ## Installation
 
-### From Source (Recommended for v1.1)
+### From Source (Recommended for Zelta 1.1)
 ```sh
 git clone https://github.com/bellhyve/zelta.git
 cd zelta
@@ -52,10 +49,17 @@ sudo ./install.sh
 ```
 
 ### FreeBSD Ports
-Zelta 1.0 (March 2024) is available in the FreeBSD Ports Collection. For the latest features, install from GitHub.
+Zelta 1.0.1_1 (March 2024) is available in the FreeBSD Ports Collection. For the latest features, install from GitHub.
 ```sh
 pkg install zelta
 ```
+
+### Experimental: One-Shot Install
+```sh
+curl -fsSL https://raw.githubusercontent.com/bellhyve/zelta/main/contrib/install-from-git.sh | sudo sh
+```
+
+**Note:** This is experimental. For production use, we recommend cloning the repository and reviewing `install.sh` before running it.
 
 ---
 
@@ -199,7 +203,7 @@ For commercial support, custom feature development, and consulting on secure, hi
 
 ## Roadmap
 
-Zelta 1.1 represents a major refactor improving POSIX compliance, portability, and code maintainability. The following features are already used internally or by Bell Tower clients and will be upstreamed by Q2 2026.
+Zelta 1.1 represents a major refactor that improves POSIX compliance, portability, and code maintainability. The following features are already used internally or by Bell Tower clients and will be upstreamed by Q2 2026.
 
 ### Features In Development
 

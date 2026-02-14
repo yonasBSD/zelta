@@ -4,6 +4,10 @@
 
 **zelta rotate** - recover sync continuity by renaming, cloning, and incrementally syncing a ZFS replica
 
+# SYNOPSIS
+
+**zelta rotate** [_OPTIONS_] _source_ _target_
+
 # DESCRIPTION
 **zelta rotate** renames a target replica and performs a multi-way clone and sync operation to restore sync continuity when a source and target have diverged. The operation considers up to four dataset states: the current source, the current target, the source's origin (if cloned), and the target's origin, finding the optimal sync path between them.
 
@@ -95,7 +99,7 @@ The original diverged datasets remain accessible as `sink/source/dataset_<snapsh
 Returns 0 on success, non-zero on error.
 
 # NOTES
-See **zelta-options(8)** for environment variables, `zelta.env` configuration, and `zelta policy` integration.
+See **zelta-options(7)** for environment variables, `zelta.env` configuration, and `zelta policy` integration.
 
 # SEE ALSO
 zelta(8), zelta-options(7), zelta-match(8), zelta-backup(8), zelta-policy(8), zelta-clone(8), zelta-revert(8), ssh(1), zfs(8), zfs-allow(8)

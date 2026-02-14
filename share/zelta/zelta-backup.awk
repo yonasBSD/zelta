@@ -19,6 +19,7 @@
 # Opt: User settings (see the 'zelta' sh script and zelta-opts.tsv)
 # NumDS: Number of datasets in the tree
 # DSList: List of "ds_suffix" elements in replication order
+# FailedProps: List of "permission denied" messages received during sync
 # Dataset: Properties of each dataset, indexed by: ("ENDPOINT", ds_suffix, element)
 # 	[zfsprops]:  ZFS properties from the property-source 'local' or 'none'
 # 	exists
@@ -135,10 +136,11 @@ function check_snapshot_needed(endpoint, ds_suffix, prop_key, prop_val) {
 
 # Load zfs properties for an endpoint
 function load_properties(ep,		_ds, _cmd_arr, _cmd, _cmd_id, _ds_suffix, _idx, _seen, _log_level) {
-	_cmd_id                 = "zfs get"
-	_ds			= Opt[ep "_DS"]
-	_cmd_arr["endpoint"]	= ep
-	_cmd_arr["ds"]		= rq(Opt[ep"_REMOTE"],_ds)
+	_cmd_id               = "zfs get"
+	_ds                   = Opt[ep "_DS"]
+	_cmd_arr["endpoint"]  = ep
+	_cmd_arr["ds"]        = rq(Opt[ep"_REMOTE"],_ds)
+	_cmd_arr["props"]     = "all"
 	if (Opt["DEPTH"]) _cmd_arr["flags"] = "-d" (Opt["DEPTH"]-1)
 	_cmd = build_command("PROPS", _cmd_arr)
 	report(LOG_INFO, "checking properties for " Opt[ep"_ID"])
@@ -246,54 +248,16 @@ function compute_send_range(ds_suffix,		_ds_suffix, _src_idx, _final_ds_snap) {
 	DSPair[_ds_suffix, "source_end"]	= _final_ds_snap
 }
 
-# Describe possible actions
-function explain_sync_status(ds_suffix, 		_src_idx, _tgt_idx, _src_ds, _tgt_ds) {
-	_src_idx	= "SRC" SUBSEP ds_suffix
-	_tgt_idx	= "TGT" SUBSEP ds_suffix
-	_src_ds		= Opt["SRC_DS"] ds_suffix
-	_tgt_ds		= Opt["TGT_DS"] ds_suffix
-
+# Report block reasons for datasets that couldn't be synced
+function explain_sync_status(ds_suffix,		_tgt_ds) {
+	_tgt_ds = Opt["TGT_DS"] ds_suffix
+	# Only report if there's a block reason to explain
 	if (Action[ds_suffix, "block_reason"])
-			report(LOG_NOTICE, Action[ds_suffix, "block_reason"]": " _tgt_ds)
-	return
-
-	# TO-DO: Review this
-	if (!DSPair[ds_suffix, "sync_blocked"]) {
-		if (!Dataset[_tgt_idx, "exists"])
-			report(LOG_NOTICE, "full backup pending or incomplete: " _tgt_ds)
-		else
-			report(LOG_NOTICE, "incremental/intermediate backup pending or incomplete: " _tgt_ds)
-		return 1
-	}
-	# States that can't be resolved with a sync or rotate
-	else if (!Dataset[_src_idx, "exists"])
-		report(LOG_NOTICE, "missing source, cannot sync: " _tgt_ds)
-	else if (!Dataset[_src_idx, "latest_snapshot"])
-		report(LOG_NOTICE, "missing source snapshot, cannot sync: " _tgt_ds)
-	else if (Dataset[_src_idx, "latest_snapshot"] == Dataset[_tgt_idx, "latest_snapshot"])
-		report(LOG_INFO, "up-to-date: " _tgt_ds)
-	# States that require 'zelta rotate', 'zfs rollback', or 'zfs rename'
-	else if (Dataset[_tgt_idx, "exists"] && !Dataset[_tgt_idx, "latest_snapshot"]) {
-		report(LOG_NOTICE, "sync blocked; target exists with no snapsots: " _tgt_ds)
-		report(LOG_NOTICE, "- full backup is required; try 'zelta rotate' or 'zfs rename'")
-	}
-	else if (Dataset[_tgt_idx, "exists"] && !DSPair[ds_suffix, "match"]) {
-		report(LOG_NOTICE, "sync blocked; target has no matching snapshots: " _tgt_ds)
-		if (Dataset[_src_idx, "origin"])
-			report(LOG_NOTICE, "- source is a clone; try 'zelta rotate' to recover or")
-		report(LOG_NOTICE, "- create a new full backup using 'zelta rotate' or 'zfs rename'")
-	}
-	else if ((Dataset[_tgt_idx, "latest_snapshot"] != DSPair[ds_suffix, "match"]) || \
-			(DSPair[ds_suffix, "target_is_written"] && DSPair[ds_suffix, "match"])) {
-		report(LOG_NOTICE, "sync blocked; target diverged: " _tgt_ds)
-		report(LOG_NOTICE, "- backup history can be retained with 'zelta rotate'")
-		report(LOG_NOTICE, "- or destroy divergent dataset with: zfs rollback " _tgt_ds DSPair[ds_suffix, "match"])
-	}
-	else report(LOG_WARNING, "unknown sync state for " _tgt_ds)
+		report(LOG_NOTICE, Action[ds_suffix, "block_reason"]": " _tgt_ds)
 }
 
-# Ensure source snapshots are avialable and load snapshot relationship data
-function validate_snapshots(		_i, _ds_suffix, _src_idx, _match, _src_latest) {
+# Ensure source snapshots are available and load snapshot relationship data
+function validate_snapshots(		_i, _ds_suffix, _src_idx, _match, _src_exists, _src_latest) {
 	create_source_snapshot()
 	load_snapshot_deltas()
 	for (_i in DSList) {
@@ -403,15 +367,15 @@ function compute_eligibility(           _i, _ds_suffix, _src_idx, _tgt_idx,
 				Action[_ds_suffix, "block_reason"] = "target has local writes"
 				continue
 			}
-			# TO-DO: Imrpove verbose output
+			# TO-DO: Improve verbose output
 			#Action[_ds_suffix, "block_reason"] = "up-to-date"
 			DSTree["up_to_date"]++
 			continue
 		}
 
-		# Target is ahead
+		# Target is ahead or has diverged otherwise
 		if (_match != _tgt_latest) {
-			Action[_ds_suffix, "block_reason"] = "target snapshots beyond the source match"
+			Action[_ds_suffix, "block_reason"] = "target has diverged"
 			Action[_ds_suffix, "can_rotate"] = 1
 			DSTree["rotatable"]++
 			continue
@@ -428,20 +392,25 @@ function compute_eligibility(           _i, _ds_suffix, _src_idx, _tgt_idx,
 ######################################
 
 # Decide whether or not to take a snapshot; if so, returns a reason
-function should_snapshot() {
+function should_snapshot(		_snapshotting) {
 	# Only attempt a snapshot once
         if (DSTree["snapshot_attempted"]) return
+	if (Opt["DRYRUN"])
+		_snapshotting = "would snapshot: "
+	else
+		_snapshotting = "snapshotting: "
+
 	# Snapshot mode is "ALWAYS" or provide a reason
-	else if (Opt["SNAP_MODE"] == "ALWAYS")
-		return "snapshotting: "
+	if (Opt["SNAP_MODE"] == "ALWAYS")
+		return _snapshotting
 	else if (Opt["SNAP_MODE"] != "IF_NEEDED")
 		return 0
 	else if (DSTree["snapshot_needed"] == SNAP_WRITTEN)
-		return "source is written; snapshotting: "
+		return "source is written; " _snapshotting
 	else if (DSTree["snapshot_needed"] == SNAP_MISSING)
-		return "missing source snapshot; snapshotting: "
+		return "missing source snapshot; " _snapshotting
 	else if (DSTree["snapshot_needed"] == SNAP_LATEST)
-		return "action requires a snapshot delta; snapshotting: "
+		return "action requires a snapshot delta; " _snapshotting
 	else return 0
 }
 
@@ -516,8 +485,8 @@ function dataset_exists(ep, ds,		_cmd_arr, _cmd, _ds_exists, _remote) {
 # so this is a perfect test and it's a requirement if the CHECK_PARENT option is given. Unfortunately,
 # a nasty ZFS bug means that 'zfs create' won't work with readonly datasets, or datasets the user doesn't
 # have access to. Thus, we cannot avoid the following gnarly logic.
-function validate_target_parent_dataset(		_parent, _cmd, _cmd_arr, _depth,
-							_ds_exists, _retry, _null_arr) {
+function validate_target_parent_dataset(		_parent, _cmd, _cmd_arr, _depth, _hit_readonly,
+												_attempts, _ds_exists, _retry, _success, _null_arr) {
 	if (DSTree["target_exists"]) return 1
 	_parent = Opt["TGT_DS"]
 	sub(/\/[^\/]*$/, "", _parent) # Strip last child element
@@ -712,6 +681,8 @@ function create_send_command(ds_suffix, idx, remote_ep, 		_cmd_arr, _cmd, _ds_sn
 function get_recv_command_flags(ds_suffix, src_idx, remote_ep,	_flag_arr, _flags, _i, _origin) {
 	if (Opt["RECV_OVERRIDE"])
 		return Opt["RECV_OVERRIDE"]
+	if (Opt["RECV_DEFAULT"])
+		_flag_arr[++_i] = Opt["RECV_DEFAULT"]
 	# If this is a full backup, rotate, or rebase, set contextual properties
 	if (!DSPair[ds_suffix, "match"] || DSPair[ds_suffix, "target_origin"]) {
 		if (ds_suffix == "")
@@ -756,18 +727,22 @@ function create_recv_command(ds_suffix, src_idx, remote_ep,		 _cmd_arr, _cmd, _t
 
 # Runs a sync, collecting "zfs send" output
 function run_zfs_sync(ds_suffix,		_cmd, _stream_info, _message, _ds_snap,
-		      				_size, _time, _streams, _sync_msg) {
+		      				_size, _time, _streams, _sync_msg, _error_msg) {
 	# TO-DO: Make 'rotate' logic more explicit
 	# TO-DO: Dryrun mode probably goes here
 	if (Opt["VERB"] == "rotate" && !Action[ds_suffix, "can_rotate"]) return
 	if (Opt["VERB"] != "rotate" && !Action[ds_suffix, "can_sync"]) return
-	#IGNORE_ZFS_SEND_OUTPUT = "^(incremental|full)| records (in|out)$|bytes.*transferred|(create|receive) mountpoint|ignoring$"
 	IGNORE_ZFS_SEND_OUTPUT = "^(incremental|full)"
 	IGNORE_RESUME_OUTPUT = "^nvlist version|^\t(fromguid|object|offset|bytes|toguid|toname|embedok|compressok)"
 	WARN_ZFS_RECV_PROPS = "cannot receive .* property"
 	FAIL_ZFS_SEND_RECV_OUTPUT = "^(cannot receive .* stream|cannot send|missing.*argument)"
-	_message            = DSPair[ds_suffix, "source_start"] ? DSPair[ds_suffix, "source_start"]"::" : ""
-	_message            = _message DSPair[ds_suffix, "source_end"]
+	_message            = Source["DS"] ds_suffix
+	if (DSPair[ds_suffix, "source_start"])
+		_message        = _message DSPair[ds_suffix, "source_start"] "%" substr(DSPair[ds_suffix, "source_end"], 2)
+	else
+		_message        = _message DSPair[ds_suffix, "source_end"]
+	#_message            = _message (DSPair[ds_suffix, "source_start"] ? DSPair[ds_suffix, "source_start"]"%" : "")
+	#_message            = _message (DSPair[ds_suffix, "source_end"]
 	_ds_snap            = Opt["SRC_DS"] ds_suffix DSPair[ds_suffix, "source_end"]
 	_sync_msg           = "synced"
 	SentStreamsList[++NumStreamsSent] = _message
@@ -808,7 +783,9 @@ function run_zfs_sync(ds_suffix,		_cmd, _stream_info, _message, _ds_snap,
 			report(LOG_INFO, "to abort a failed resume, run: 'zfs receive -A " Opt["SRC_DS"] ds_suffix"'")
 		}
 		else if ($0 ~ FAIL_ZFS_SEND_RECV_OUTPUT) {
-			report(LOG_ERROR, $0 ": " Opt["TGT_DS"] ds_suffix)
+			_error_msg = $0 ": " Opt["TGT_DS"] ds_suffix
+			report(LOG_ERROR, _error_msg)
+			Summary["replicationErrorCode"] = 2
 			break
 		}
 		else if ($0 ~ WARN_ZFS_RECV_PROPS) {
@@ -821,8 +798,11 @@ function run_zfs_sync(ds_suffix,		_cmd, _stream_info, _message, _ds_snap,
 			report(LOG_INFO, $0)
 		else if ($0 ~ IGNORE_ZFS_SEND_OUTPUT) {}
 		else if ($0 ~ IGNORE_RESUME_OUTPUT) {}
-		else if (log_common_command_feedback() == LOG_ERROR)
+		else if (log_common_command_feedback() == LOG_ERROR) {
+			_error_msg = $0
+			Summary["replicationErrorCode"] = 2
 			break
+		}
 	}
 	close(_cmd)
 	if (_streams) {
@@ -837,7 +817,6 @@ function run_zfs_sync(ds_suffix,		_cmd, _stream_info, _message, _ds_snap,
 		Action[ds_suffix, "can_sync"] = 0
 	}
 }
-		#jlist("errorMessages", error_list)
 
 ## Construct replication commands
 function get_sync_command(ds_suffix,		_src_idx, _tgt_idx, _cmd, _zfs_send, _zfs_recv,
@@ -897,6 +876,11 @@ function rename_dataset(endpoint,		_old_ds, _new_ds, _remote, _snap,
 	_cmd_arr["old_ds"]		= rq(_remote, _old_ds)
 	_cmd_arr["new_ds"]		= rq(_remote, _new_ds)
 	_cmd				= build_command("RENAME", _cmd_arr)
+	if (Opt["DRYRUN"]) {
+		report(LOG_NOTICE, "would rename '" _old_ds "' to '" _new_ds"'")
+		report(LOG_NOTICE, "+ "_cmd)
+		return _new_ds
+	}
 	report(LOG_NOTICE, "renaming '" _old_ds "' to '" _new_ds"'")
 	report(LOG_DEBUG, "`"_cmd"`")
 	_cmd = _cmd CAPTURE_OUTPUT
@@ -1002,7 +986,7 @@ function run_rotate(		_src_ds_snap, _up_to_date, _src_origin_ds, _origin_arr, _n
 	load_snapshot_deltas()
 
 	if (DSTree["snapshots_diverged"])
-		report(LOG_NOTICE, "ensure preservation of diverged replica with: zelta backup " _src_origin_ds " " DSTree["target_origin"])
+		report(LOG_NOTICE, "ensure the preservation of diverged replica with: zelta backup " _src_origin_ds " " DSTree["target_origin"])
 	report(LOG_NOTICE, "to ensure target is up-to-date, run: zelta backup " Source["ID"] " " Target["ID"])
 }
 
@@ -1050,9 +1034,10 @@ function run_revert(		_ds) {
 }
 
 # 'zelta backup' and 'zelta sync' orchestration
-function run_backup(		_i, _ds_suffix, _syncable) {
+function run_backup(		_i, _ds_suffix, _syncing, _syncable) {
+	_syncing = Opt["DRYRUN"] ? "would sync " : "syncing "
 	if (DSTree["syncable"])
-		report(LOG_NOTICE, "syncing " NumDS " datasets")
+		report(LOG_NOTICE, _syncing NumDS " datasets")
 	for (_i = 1; _i <= NumDS; _i++) {
 		_ds_suffix = DSList[_i]
 		# Run first pass sync
@@ -1063,7 +1048,7 @@ function run_backup(		_i, _ds_suffix, _syncable) {
 	}
 }
 
-function print_summary(		_i, _ds_suffix, _num_streams) {
+function print_summary(		_status, _i, _ds_suffix, _num_streams) {
 	if(Summary["failed_props"])
 		report(LOG_WARNING, "missing `zfs allow` permissions: " Summary["failed_props"])
 	if (DSTree["up_to_date"] == NumDS) {
@@ -1074,18 +1059,11 @@ function print_summary(		_i, _ds_suffix, _num_streams) {
 			_ds_suffix = DSList[_i]
 			explain_sync_status(_ds_suffix)
 		}
-#		if (!Summary["replicationStreamsSent"])
-#			report(LOG_NOTICE, "nothing to sync")
 	}
 	_bytes_sent	= h_num(Summary["replicationSize"])
 	_num_streams	= Summary["replicationStreamsReceived"]
 	_seconds	= Summary["replicationTime"]
 	if (_num_streams) report(LOG_NOTICE, _bytes_sent " sent, "_num_streams" streams received in "_seconds" seconds")
-	if (_num_streams && (Opt["LOG_MODE"] == "json")) {
-		json_new_array("sentStreams")
-		for (_i = 1; _i <= NumStreamsSent; _i++) json_element(SentStreamsList[_i])
-		json_close_array()
-	}
 }
 
 # Main planning function
@@ -1102,9 +1080,12 @@ BEGIN {
 	SNAP_LATEST   = 4
 
 	# Telemetry
-	DSTree["vers_major"]  = 1
-	DSTree["vers_minor"]  = 1
+	GlobalState["vers_major"]  = 1
+	GlobalState["vers_minor"]  = 1
 	Summary["startTime"]  = sys_time()
+	Summary["replicationErrorCode"] = 0
+	Summary["replicationStreamsReceived"] = 0
+	Summary["replicationStreamsSent"] = 0
 
 	# Misc variables
 	DSTree["final_snapshot"]  = Opt["SRC_SNAP"]
@@ -1140,9 +1121,7 @@ BEGIN {
 	Summary["runTime"]			= Summary["endTime"] - Summary["startTime"]
 
 	compute_eligibility()
-	load_summary_data()
-	load_summary_vars()
 	print_summary()
 
-	stop()
+	stop(Summary["replicationErrorCode"])
 }

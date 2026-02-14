@@ -4,12 +4,12 @@
 #
 # Initialize the environment for Zelta subcommands
 
-ZELTA_VERSION="Zelta Replication Suite v1.1-beta4"
+ZELTA_VERSION="Zelta 1.1.0"
 
 zelta_usage() {
 	exec >&2
 	if [ -n "$1" ] ; then
-		echo unrecognized command \'"$1"\'
+		echo "unrecognized command: '$1'"
 		case "$1" in
 		list)      echo did you mean "'zelta match'?" ;;
 		send)      echo did you mean "'zelta backup'?" ;;
@@ -159,10 +159,10 @@ zelta_init() {
 
 	# `zfs send` defaults
 	: ${ZELTA_SEND_DEFAULT:="-L -c -e"}
-	: ${ZELTA_SEND_RAW:="-L -w"}
+	: ${ZELTA_SEND_RAW:="--raw"}
 	: ${ZELTA_SEND_NEW:="-p"}
 	: ${ZELTA_SEND_INTR:="1"}
-	: ${ZELTA_SEND_REPLICATE:="-L -s -R -w"}
+	: ${ZELTA_SEND_REPLICATE:="--raw -s -R"}
 
 	# `zfs recv` defaults
 	: ${ZELTA_RECV_DEFAULT:=""}

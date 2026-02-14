@@ -1,5 +1,16 @@
+!.gitignore
+!.shellspec
 *.swp
 *.swo
 .*
 doc/man?
-!.gitignore
+tmp
+hide.*
+*~
+\#*#
+TAGS
+A*d
+.#*
+retired/
+logs
+log
