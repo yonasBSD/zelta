@@ -9,6 +9,8 @@
 > 
 >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;  ![ShellSpec Tests](https://github.com/bell-tower/zelta/actions/workflows/shellspec.yml/badge.svg)
 ---
+> **BSDCan 2026 Preview can be found here:** [June 2026, Zelta 1.2.BSDCan2026](https://github.com/bell-tower/zelta/tree/release/bsdcan2026)
+---
 
 [zelta.space](https://zelta.space) | [Documentation](https://zelta.space/en/home) | [GitHub](https://github.com/bell-tower/zelta)
 
